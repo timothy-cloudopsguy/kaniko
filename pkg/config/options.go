@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -92,6 +93,7 @@ type KanikoOptions struct {
 	ForceBuildMetadata       bool
 	InitialFSUnpacked        bool
 	SkipPushPermissionCheck  bool
+	VirtualChown             bool
 }
 
 type KanikoGitOptions struct {
@@ -102,6 +104,45 @@ type KanikoGitOptions struct {
 }
 
 var ErrInvalidGitFlag = errors.New("invalid git flag, must be in the key=value format")
+
+// OwnershipMeta represents the intended ownership metadata for a file
+type OwnershipMeta struct {
+	Uid int
+	Gid int
+}
+
+// VirtualOwnershipTracker tracks virtual ownership metadata for files
+type VirtualOwnershipTracker struct {
+	mu     sync.RWMutex
+	owners map[string]OwnershipMeta
+}
+
+// Global virtual ownership tracker instance
+var VirtualOwnership = &VirtualOwnershipTracker{
+	owners: make(map[string]OwnershipMeta),
+}
+
+// SetVirtualOwnership sets the virtual ownership for a file path
+func (v *VirtualOwnershipTracker) SetVirtualOwnership(path string, uid, gid int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.owners[path] = OwnershipMeta{Uid: uid, Gid: gid}
+}
+
+// GetVirtualOwnership gets the virtual ownership for a file path
+func (v *VirtualOwnershipTracker) GetVirtualOwnership(path string) (OwnershipMeta, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	meta, exists := v.owners[path]
+	return meta, exists
+}
+
+// ClearVirtualOwnership clears all virtual ownership entries
+func (v *VirtualOwnershipTracker) ClearVirtualOwnership() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.owners = make(map[string]OwnershipMeta)
+}
 
 func (k *KanikoGitOptions) Type() string {
 	return "gitoptions"

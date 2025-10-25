@@ -565,6 +565,17 @@ func FilepathExists(path string) bool {
 // resetFileOwnershipIfNotMatching function changes ownership of the file at path to newUID and newGID.
 // If the ownership already matches, chown is not executed.
 func resetFileOwnershipIfNotMatching(path string, newUID, newGID uint32) error {
+	// Check if virtual chown is enabled via environment variable
+	if val, ok := os.LookupEnv("KANIKO_VIRTUAL_CHOWN"); ok {
+		if val == "true" {
+			// When virtual chown is enabled, always record the ownership (don't check current ownership)
+			config.VirtualOwnership.SetVirtualOwnership(path, int(newUID), int(newGID))
+			logrus.Debugf("Virtual chown: resetting ownership for %s to UID=%d, GID=%d (skipping real chown)", path, newUID, newGID)
+			return nil
+		}
+	}
+
+	// Normal behavior: check current ownership and only chown if different
 	fsInfo, err := os.Lstat(path)
 	if err != nil {
 		return errors.Wrap(err, "getting stat of present file")
@@ -866,6 +877,19 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 			),
 		)
 	}
+
+	// Check if virtual chown is enabled via environment variable
+	if val, ok := os.LookupEnv("KANIKO_VIRTUAL_CHOWN"); ok {
+		if val == "true" {
+			// When virtual chown is enabled, record the ownership instead of setting it
+			config.VirtualOwnership.SetVirtualOwnership(path, int(uid), int(gid))
+			logrus.Debugf("Virtual chown: setting ownership for directory %s to UID=%d, GID=%d (skipping real chown)", path, uid, gid)
+			// Still need to set permissions
+			return os.Chmod(path, mode)
+		}
+	}
+
+	// Normal behavior: perform actual chown
 	if err := os.Chown(path, int(uid), int(gid)); err != nil {
 		return err
 	}
@@ -875,6 +899,18 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 }
 
 func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
+	// Check if virtual chown is enabled via environment variable
+	if val, ok := os.LookupEnv("KANIKO_VIRTUAL_CHOWN"); ok {
+		if val == "true" {
+			// When virtual chown is enabled, record the ownership instead of setting it
+			config.VirtualOwnership.SetVirtualOwnership(path, uid, gid)
+			logrus.Debugf("Virtual chown: setting ownership for %s to UID=%d, GID=%d (skipping real chown)", path, uid, gid)
+			// Still need to set permissions
+			return os.Chmod(path, mode)
+		}
+	}
+
+	// Normal behavior: perform actual chown
 	if err := os.Chown(path, uid, gid); err != nil {
 		return err
 	}
@@ -1031,6 +1067,18 @@ func CopyOwnership(src string, destDir string, root string) error {
 			return errors.Wrap(err, "reading ownership")
 		}
 		stat := info.Sys().(*syscall.Stat_t)
+
+		// Check if virtual chown is enabled via environment variable
+		if val, ok := os.LookupEnv("KANIKO_VIRTUAL_CHOWN"); ok {
+			if val == "true" {
+				// When virtual chown is enabled, record the ownership instead of setting it
+				config.VirtualOwnership.SetVirtualOwnership(destPath, int(stat.Uid), int(stat.Gid))
+				logrus.Debugf("Virtual chown: copying ownership for %s to UID=%d, GID=%d (skipping real chown)", destPath, stat.Uid, stat.Gid)
+				return nil
+			}
+		}
+
+		// Normal behavior: perform actual chown
 		return os.Chown(destPath, int(stat.Uid), int(stat.Gid))
 	})
 }
@@ -1057,6 +1105,16 @@ func createParentDirectory(path string, uid int, gid int) error {
 				os.Mkdir(dir, 0o755)
 				if uid != DoNotChangeUID {
 					if gid != DoNotChangeGID {
+						// Check if virtual chown is enabled via environment variable
+						if val, ok := os.LookupEnv("KANIKO_VIRTUAL_CHOWN"); ok {
+							if val == "true" {
+								// When virtual chown is enabled, record the ownership instead of setting it
+								config.VirtualOwnership.SetVirtualOwnership(dir, uid, gid)
+								logrus.Debugf("Virtual chown: setting ownership for directory %s to UID=%d, GID=%d (skipping real chown)", dir, uid, gid)
+								continue
+							}
+						}
+						// Normal behavior: perform actual chown
 						os.Chown(dir, uid, gid)
 					} else {
 						return errors.New(fmt.Sprintf("UID=%d but GID=-1, i.e. it is not set for %s", uid, dir))

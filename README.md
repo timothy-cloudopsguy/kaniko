@@ -30,6 +30,7 @@ expect - see [Known Issues](#known-issues).
   - [Community](#community)
   - [Releases](#releases)
   - [How does kaniko work?](#how-does-kaniko-work)
+  - [Virtual Chown Support](#virtual-chown-support)
   - [Known Issues](#known-issues)
   - [Demo](#demo)
   - [Tutorial](#tutorial)
@@ -98,6 +99,7 @@ expect - see [Known Issues](#known-issues).
       - [Flag `--tar-path`](#flag---tar-path)
       - [Flag `--target`](#flag---target)
       - [Flag `--use-new-run`](#flag---use-new-run)
+      - [Flag `--virtual-chown`](#flag---virtual-chown)
       - [Flag `--verbosity`](#flag---verbosity)
       - [Flag `--ignore-var-run`](#flag---ignore-var-run)
       - [Flag `--ignore-path`](#flag---ignore-path)
@@ -180,6 +182,33 @@ filesystem of the base image (the FROM image in the Dockerfile). We then execute
 the commands in the Dockerfile, snapshotting the filesystem in userspace after
 each one. After each command, we append a layer of changed files to the base
 image (if there are any) and update image metadata.
+
+## Virtual Chown Support
+
+Kaniko supports building container images in restricted environments where filesystem
+ownership operations (`chown()`) are blocked, such as AWS Lambda or other serverless
+platforms.
+
+The `--virtual-chown` flag enables **virtual ownership tracking**, which allows Kaniko
+to simulate ownership changes without performing actual filesystem operations:
+
+- **Skips real chown syscalls** on the host filesystem
+- **Records intended ownership metadata** in memory for each file
+- **Applies correct UID/GID in image layers** based on Dockerfile directives (`USER`, `COPY --chown`, etc.)
+
+This ensures that the final container image has the correct file ownership as defined
+in your Dockerfile, even in environments that restrict filesystem ownership changes.
+
+**Example usage:**
+```bash
+/kaniko/executor --virtual-chown=true --context . --destination myrepo/app:latest
+```
+
+Or set the environment variable:
+```bash
+export KANIKO_VIRTUAL_CHOWN=true
+/kaniko/executor --context . --destination myrepo/app:latest
+```
 
 ## Known Issues
 
@@ -1177,6 +1206,30 @@ run command implementation, the total build time is reduced seeing performance
 improvements in the range of ~75%. This new run mode trades off
 accuracy/correctness in some cases (potential for missed files in a "snapshot")
 for improved performance by avoiding the full filesystem snapshots.
+
+#### Flag `--virtual-chown`
+
+Set this flag as `--virtual-chown=true` to enable virtual ownership tracking. This
+feature allows Kaniko to build images successfully in restricted environments
+such as AWS Lambda, where filesystem `chown()` operations are blocked.
+
+When enabled, Kaniko will:
+- Skip actual `chown()` syscalls on the host filesystem
+- Record intended UID/GID metadata in memory for each file
+- Apply the correct ownership metadata in the resulting image tar layers
+
+This ensures that the final container image has the correct file ownership as
+defined in the Dockerfile (via `USER`, `COPY --chown`, etc.) even when the build
+environment restricts filesystem ownership changes.
+
+This flag can also be set via the `KANIKO_VIRTUAL_CHOWN=true` environment variable.
+
+**Default:** `false`
+
+**Example:**
+```bash
+/kaniko/executor --virtual-chown=true --context . --destination myrepo/app:latest
+```
 
 #### Flag `--verbosity`
 

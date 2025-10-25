@@ -87,6 +87,15 @@ func validateFlags() {
 		opts.RegistryMaps.Set(val)
 	}
 
+	// Allow setting --virtual-chown using an environment variable.
+	if val, ok := os.LookupEnv("KANIKO_VIRTUAL_CHOWN"); ok {
+		valBoolean, err := strconv.ParseBool(val)
+		if err != nil {
+			return errors.New("invalid value (true/false) for KANIKO_VIRTUAL_CHOWN environment variable")
+		}
+		opts.VirtualChown = valBoolean
+	}
+
 	for _, target := range opts.RegistryMirrors {
 		opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target))
 	}
@@ -282,6 +291,7 @@ func addKanikoOptionsFlags() {
 	RootCmd.PersistentFlags().BoolVarP(&opts.SkipPushPermissionCheck, "skip-push-permission-check", "", false, "Skip check of the push permission")
 	opts.Annotations = make(map[string]string)
 	RootCmd.PersistentFlags().VarP(&opts.Annotations, "annotation", "", "Set metadata annotations for the image in key=value format. Set it repeatedly for multiple annotations.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.VirtualChown, "virtual-chown", "", false, "Enable virtual ownership tracking (skip real chown syscalls and record ownership metadata for tar headers)")
 
 	// Deprecated flags.
 	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotModeDeprecated, "snapshotMode", "", "", "This flag is deprecated. Please use '--snapshot-mode'.")

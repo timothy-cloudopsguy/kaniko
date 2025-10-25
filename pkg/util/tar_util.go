@@ -102,6 +102,18 @@ func (t *Tar) AddFileToTar(p string) error {
 		return err
 	}
 
+	// Check if virtual chown is enabled and override UID/GID with virtual ownership
+	if val, ok := os.LookupEnv("KANIKO_VIRTUAL_CHOWN"); ok {
+		if val == "true" {
+			// Check if there's virtual ownership metadata for this path
+			if meta, exists := config.VirtualOwnership.GetVirtualOwnership(p); exists {
+				hdr.Uid = meta.Uid
+				hdr.Gid = meta.Gid
+				logrus.Debugf("Virtual chown: using virtual ownership for %s: UID=%d, GID=%d", p, meta.Uid, meta.Gid)
+			}
+		}
+	}
+
 	if p == config.RootDir {
 		// allow entry for / to preserve permission changes etc. (currently ignored anyway by Docker runtime)
 		hdr.Name = "/"
