@@ -86,9 +86,26 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	logrus.Infof("Cmd: %s", newCommand[0])
 	logrus.Infof("Args: %s", newCommand[1:])
 
-	cmd := exec.Command(newCommand[0], newCommand[1:]...)
+	// Use chroot to execute commands in the extracted filesystem context
+	// This isolates the command execution from the original container environment
+	var cmd *exec.Cmd
+	if cmdRun.PrependShell {
+		// For shell commands, use the shell from within the chroot
+		cmd = exec.Command("sudo", "chroot", kConfig.KanikoDir, "/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))
+	} else {
+		// For direct commands, chroot to the kaniko directory
+		cmd = exec.Command("sudo", "chroot", kConfig.KanikoDir, newCommand[0])
+		cmd.Args = append(cmd.Args, newCommand[1:]...)
+	}
 
-	cmd.Dir = setWorkDirIfExists(config.WorkingDir)
+	// Set working directory relative to the chroot root
+	if config.WorkingDir != "" && config.WorkingDir != "/" {
+		// Working directory is relative to the chroot root
+		cmd.Dir = config.WorkingDir
+	} else {
+		// Default to root of chroot
+		cmd.Dir = "/"
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
