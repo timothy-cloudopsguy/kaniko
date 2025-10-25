@@ -65,7 +65,7 @@ func init() {
 	RootCmd.PersistentFlags().MarkDeprecated("whitelist-var-run", "Please use ignore-var-run instead.")
 }
 
-func validateFlags() {
+func validateFlags() error {
 	checkNoDeprecatedFlags()
 
 	// Allow setting --registry-mirror using an environment variable.
@@ -77,7 +77,7 @@ func validateFlags() {
 	if val, ok := os.LookupEnv("KANIKO_NO_PUSH"); ok {
 		valBoolean, err := strconv.ParseBool(val)
 		if err != nil {
-			errors.New("invalid value (true/false) for KANIKO_NO_PUSH environment variable")
+			return errors.New("invalid value (true/false) for KANIKO_NO_PUSH environment variable")
 		}
 		opts.NoPush = valBoolean
 	}
@@ -95,6 +95,8 @@ func validateFlags() {
 		}
 		opts.VirtualChown = valBoolean
 	}
+
+	return nil
 
 	for _, target := range opts.RegistryMirrors {
 		opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target))
@@ -125,7 +127,9 @@ var RootCmd = &cobra.Command{
 				return err
 			}
 
-			validateFlags()
+			if err := validateFlags(); err != nil {
+				return err
+			}
 
 			// Command line flag takes precedence over the KANIKO_DIR environment variable.
 			dir := config.KanikoDir
