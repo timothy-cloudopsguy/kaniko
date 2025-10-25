@@ -96,6 +96,9 @@ func validateFlags() error {
 		opts.VirtualChown = valBoolean
 	}
 
+	// Set the global virtual chown flag (command line flag takes precedence over env var)
+	config.VirtualChownEnabled = opts.VirtualChown
+
 	for _, target := range opts.RegistryMirrors {
 		opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target))
 	}
@@ -321,8 +324,15 @@ func checkKanikoDir(dir string) error {
 			return err
 		}
 
+		// Try to remove the default directory, but don't fail if it's read-only
 		if err := os.RemoveAll(constants.DefaultKanikoPath); err != nil {
-			return err
+			// Check if this is a read-only filesystem error - if so, just warn and continue
+			errMsg := strings.ToLower(err.Error())
+			if strings.Contains(errMsg, "read-only") || strings.Contains(errMsg, "operation not permitted") || strings.Contains(errMsg, "permission denied") {
+				logrus.Warnf("Cannot remove default kaniko directory %s (filesystem restrictions), but this is not fatal", constants.DefaultKanikoPath)
+			} else {
+				return err
+			}
 		}
 		// After remove DefaultKankoPath, the DOKCER_CONFIG env will point to a non-exist dir, so we should update DOCKER_CONFIG env to new dir
 		if err := os.Setenv("DOCKER_CONFIG", filepath.Join(dir, "/.docker")); err != nil {

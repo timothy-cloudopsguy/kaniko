@@ -46,6 +46,9 @@ var KanikoIntermediateStagesDir = fmt.Sprintf("%s/stages/", KanikoDir)
 
 var MountInfoPath string
 
+// VirtualChownEnabled indicates whether virtual chown is enabled
+var VirtualChownEnabled bool
+
 func init() {
 	RootDir = constants.RootDir
 	MountInfoPath = constants.MountInfoPath
