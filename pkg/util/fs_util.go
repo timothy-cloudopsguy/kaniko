@@ -208,6 +208,12 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 					continue
 				}
 
+				// Skip removal of the workspace root directory
+				if path == config.RootDir {
+					logrus.Tracef("Skipping removal of workspace root directory %s", path)
+					continue
+				}
+
 				if err := os.RemoveAll(path); err != nil {
 					return nil, errors.Wrapf(err, "removing whiteout %s", hdr.Name)
 				}
@@ -217,6 +223,14 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 					continue
 				}
 
+			}
+
+			// Skip extraction of the workspace root directory itself
+			fullPath := filepath.Join(root, cleanedName)
+			cleanFullPath := filepath.Clean(fullPath)
+			if cleanFullPath == config.RootDir {
+				logrus.Tracef("Skipping extraction of workspace root directory %s", cleanFullPath)
+				continue
 			}
 
 			if err := cfg.extractFunc(root, hdr, cleanedName, tr); err != nil {
@@ -307,15 +321,25 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 	uid := hdr.Uid
 	gid := hdr.Gid
 
-	abs, err := filepath.Abs(path)
+	// Skip processing the workspace root directory itself and other invalid paths
+	cleanPath := filepath.Clean(path)
+	if cleanPath == config.RootDir || cleanPath == dest || cleanedName == "" || cleanedName == "." || cleanedName == ".." {
+		logrus.Tracef("Skipping directory %s", cleanPath)
+		return nil
+	}
+
+	abs, err := filepath.Abs(cleanPath)
 	if err != nil {
 		return err
 	}
+
+	path = cleanPath
 
 	if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
 		logrus.Debugf("Not adding %s because it is ignored", path)
 		return nil
 	}
+
 	switch hdr.Typeflag {
 	case tar.TypeReg:
 		logrus.Tracef("Creating file %s", path)
@@ -1012,8 +1036,13 @@ func CopyFileOrSymlink(src string, destDir string, root string) error {
 	if err := CopyOwnership(src, destDir, root); err != nil {
 		return errors.Wrap(err, "copying ownership")
 	}
-	if err := os.Chmod(destFile, fi.Mode()); err != nil {
-		return errors.Wrap(err, "copying file mode")
+	// Skip chmod operations on the workspace root directory
+	if destFile == config.RootDir {
+		logrus.Tracef("Skipping chmod for workspace root directory %s", destFile)
+	} else {
+		if err := os.Chmod(destFile, fi.Mode()); err != nil {
+			return errors.Wrap(err, "copying file mode")
+		}
 	}
 	return nil
 }
@@ -1083,7 +1112,7 @@ func createParentDirectory(path string, uid int, gid int) error {
 		dir := baseDir
 		dirs := []string{baseDir}
 		for {
-			if dir == "/" || dir == "." || dir == "" {
+			if dir == config.RootDir || dir == "." || dir == "" {
 				break
 			}
 			dir = filepath.Dir(dir)

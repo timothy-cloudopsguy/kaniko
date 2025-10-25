@@ -50,6 +50,8 @@ var MountInfoPath string
 var VirtualChownEnabled bool
 
 func init() {
-	RootDir = constants.RootDir
+	// Use KanikoDir as the root for filesystem operations instead of system root
+	// This prevents trying to modify the real system root filesystem
+	RootDir = KanikoDir
 	MountInfoPath = constants.MountInfoPath
 }
