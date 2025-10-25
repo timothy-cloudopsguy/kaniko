@@ -96,8 +96,6 @@ func validateFlags() error {
 		opts.VirtualChown = valBoolean
 	}
 
-	return nil
-
 	for _, target := range opts.RegistryMirrors {
 		opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target))
 	}
@@ -115,6 +113,8 @@ func validateFlags() error {
 	if _, err := v1.ParsePlatform(opts.CustomPlatform); err != nil {
 		logrus.Fatalf("Invalid platform %q: %v", opts.CustomPlatform, err)
 	}
+
+	return nil
 }
 
 // RootCmd is the kaniko command that is run
