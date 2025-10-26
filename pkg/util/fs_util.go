@@ -881,8 +881,12 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 		// When virtual chown is enabled, record the ownership instead of setting it
 		config.VirtualOwnership.SetVirtualOwnership(path, int(uid), int(gid))
 		logrus.Debugf("Virtual chown: setting ownership for directory %s to UID=%d, GID=%d (skipping real chown)", path, uid, gid)
-		// Still need to set permissions
-		return os.Chmod(path, mode)
+		// Still need to set permissions, unless the path is the root directory
+		if path != config.RootDir && strings.HasPrefix(path, config.KanikoDir) {
+			logrus.Debugf("Virtual chown: setting permissions for directory %s to %o", path, mode)
+			return os.Chmod(path, mode)
+		}
+		return nil
 	}
 
 	// Normal behavior: perform actual chown
