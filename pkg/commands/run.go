@@ -96,9 +96,105 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return errors.Wrapf(err, "resolving user %s", userAndGroup[0])
 	}
 
+	// Check if we're in Lambda mode first
+	lambdaMode := false
+	if val, ok := os.LookupEnv("KANIKO_LAMBDA_MODE"); ok {
+		if val == "true" || val == "1" {
+			lambdaMode = true
+		}
+	}
+
+	if lambdaMode {
+		// Execute command through our Lambda-compatible wrapper
+		logrus.Infof("Running in Lambda mode with filesystem interception")
+
+		// Use our command wrapper script
+		wrapperScript := "/kaniko_command_wrapper.sh"
+		if _, err := os.Stat(wrapperScript); os.IsNotExist(err) {
+			return errors.Errorf("command wrapper script not found at %s", wrapperScript)
+		}
+
+		// Build the command to execute
+		var cmd *exec.Cmd
+		if cmdRun.PrependShell {
+			// For shell commands, pass the entire command line to the wrapper
+			cmd = exec.Command(wrapperScript, "/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))
+		} else {
+			// For direct commands, pass the command and arguments to the wrapper
+			args := append([]string{newCommand[0]}, newCommand[1:]...)
+			cmd = exec.Command(wrapperScript, args...)
+		}
+
+		// Set environment variables
+		replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+		cmd.Env = replacementEnvs
+
+		// Set kaniko directory as working directory
+		cmd.Dir = kConfig.KanikoDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		// Add Lambda-specific environment variables
+		cmd.Env = append(cmd.Env, "KANIKO_LAMBDA_MODE=true")
+		cmd.Env = append(cmd.Env, fmt.Sprintf("KANIKO_BASE=%s", kConfig.KanikoDir))
+
+		// Set user if specified (though Lambda mode may not support this well)
+		if userStr != "" && userStr != "root" && userStr != "0" {
+			logrus.Warnf("Running as user %s in Lambda mode - this may not work as expected", userStr)
+		}
+
+		logrus.Infof("Running Lambda command: %s", cmd.Args)
+		if err := cmd.Start(); err != nil {
+			return errors.Wrap(err, "starting lambda command")
+		}
+
+		// Wait for the process to complete
+		if err := cmd.Wait(); err != nil {
+			return errors.Wrap(err, "waiting for lambda command to exit")
+		}
+
+		return nil
+	}
+
+	// Check if we should use PRoot or run commands directly
+	// In containerized environments, PRoot may fail due to ptrace restrictions
+	useProot := true
+	if val, ok := os.LookupEnv("KANIKO_USE_PROOT"); ok {
+		if val == "false" || val == "0" {
+			useProot = false
+		}
+	}
+
+	if !useProot {
+		// Execute command directly without PRoot
+		logrus.Infof("Executing command directly (PRoot disabled)")
+		var cmd *exec.Cmd
+		if cmdRun.PrependShell {
+			cmd = exec.Command("/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))
+		} else {
+			cmd = exec.Command(newCommand[0], newCommand[1:]...)
+		}
+
+		// Set environment variables
+		replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+		cmd.Env = replacementEnvs
+		cmd.Dir = kConfig.KanikoDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		// Set user if specified
+		if userStr != "" && userStr != "root" && userStr != "0" {
+			// Note: Running as non-root user without PRoot may not work in all cases
+			logrus.Warnf("Running as user %s without PRoot - this may fail if user doesn't exist", userStr)
+		}
+
+		return cmd.Run()
+	}
+
 	// Use PRoot to execute commands in the extracted filesystem context
 	// This isolates the command execution from the original container environment
 	// PRoot provides better compatibility and doesn't require root privileges
+	logrus.Infof("Using PRoot for command execution")
 	var prootArgs []string
 	prootArgs = append(prootArgs, "-R", kConfig.KanikoDir)
 
