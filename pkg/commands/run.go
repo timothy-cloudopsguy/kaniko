@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -101,6 +102,10 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	var prootArgs []string
 	prootArgs = append(prootArgs, "-R", kConfig.KanikoDir)
 
+	// Add essential bind mounts for system functionality
+	// This ensures /proc, /sys, /dev are available in the guest environment
+	prootArgs = append(prootArgs, "-b", "/proc", "-b", "/sys", "-b", "/dev", "-b", "/tmp")
+
 	// For package managers and system operations, fake root privileges
 	// This allows dnf, apt, etc. to work properly without actual root access
 	if userStr == "" || userStr == "root" || userStr == "0" {
@@ -110,24 +115,47 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		prootArgs = append(prootArgs, "-u", userStr)
 	}
 
+	// Set up environment for PRoot execution
+	// Use the existing environment handling logic
+	prootEnv := buildArgs.ReplacementEnvs(config.Env)
+
 	var cmd *exec.Cmd
 	if cmdRun.PrependShell {
-		// For shell commands, use PRoot with automatic system directory binding
-		cmd = exec.Command("proot", append(prootArgs, "/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))...)
+		// For shell commands, use the shell from the host since guest might not have it
+		// Use the configured shell or default to /bin/sh from host
+		shell := "/bin/sh"
+		if len(config.Shell) > 0 {
+			shell = config.Shell[0]
+		}
+
+		// Use host shell with PRoot to execute in guest context
+		cmd = exec.Command("proot", append(prootArgs, shell, "-c", strings.Join(cmdRun.CmdLine, " "))...)
 	} else {
 		// For direct commands, use PRoot with automatic binding
-		cmd = exec.Command("proot", append(prootArgs, newCommand[0])...)
+		// Ensure the command path is accessible - use host path since guest might not have it
+		guestCommand := newCommand[0]
+		if !strings.HasPrefix(guestCommand, "/") {
+			// If it's not an absolute path, look for it in the host PATH first
+			if hostPath, err := exec.LookPath(guestCommand); err == nil {
+				guestCommand = hostPath
+			}
+		}
+
+		cmd = exec.Command("proot", append(prootArgs, guestCommand)...)
 		cmd.Args = append(cmd.Args, newCommand[1:]...)
 	}
 
-	// PRoot handles working directory internally, but we can still set it
+	// Set working directory - ensure it exists within the guest filesystem
+	workDir := kConfig.KanikoDir // Default to kaniko directory
 	if config.WorkingDir != "" && config.WorkingDir != "/" {
-		// Working directory is relative to the PRoot root
-		cmd.Dir = config.WorkingDir
-	} else {
-		// Default to root of PRoot
-		cmd.Dir = "/"
+		// Check if the working directory exists in the guest, fallback to kaniko dir
+		if _, err := os.Stat(filepath.Join(kConfig.KanikoDir, config.WorkingDir)); err == nil {
+			workDir = config.WorkingDir
+		} else {
+			logrus.Warnf("Working directory %s not found in guest filesystem, using %s", config.WorkingDir, kConfig.KanikoDir)
+		}
 	}
+	cmd.Dir = workDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -135,11 +163,17 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	// User switching is handled by PRoot with -0 or -u flags above
 	// No need for host-level credential changes
 
-	env, err := addDefaultHOME(userStr, replacementEnvs)
+	// Set environment variables for PRoot execution
+	// Convert map to slice format for addDefaultHOME
+	var prootEnvSlice []string
+	for key, value := range prootEnv {
+		prootEnvSlice = append(prootEnvSlice, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	env, err := addDefaultHOME(userStr, prootEnvSlice)
 	if err != nil {
 		return errors.Wrap(err, "adding default HOME variable")
 	}
-
 	cmd.Env = env
 
 	logrus.Infof("Running: %s", cmd.Args)
