@@ -17,8 +17,6 @@ limitations under the License.
 package commands
 
 import (
-	"os"
-
 	"github.com/chainguard-dev/kaniko/pkg/dockerfile"
 	"github.com/chainguard-dev/kaniko/pkg/util"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
