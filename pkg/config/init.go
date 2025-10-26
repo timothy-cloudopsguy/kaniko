@@ -50,6 +50,6 @@ var MountInfoPath string
 var VirtualChownEnabled bool
 
 func init() {
-	RootDir = KanikoDir
+	RootDir = constants.RootDir
 	MountInfoPath = constants.MountInfoPath
 }
