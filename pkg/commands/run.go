@@ -106,6 +106,23 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	// This ensures /proc, /sys, /dev are available in the guest environment
 	prootArgs = append(prootArgs, "-b", "/proc", "-b", "/sys", "-b", "/dev", "-b", "/tmp")
 
+	// Bind common host binaries that might be needed in the guest
+	// This ensures commands like wget, unzip, make, etc. are available
+	commonBinaries := []string{"wget", "unzip", "tar", "make", "dnf", "yum", "apt", "apt-get", "curl", "git", "golang", "go"}
+	for _, binary := range commonBinaries {
+		if hostPath, err := exec.LookPath(binary); err == nil {
+			prootArgs = append(prootArgs, "-b", hostPath)
+		}
+	}
+
+	// Also bind common shell utilities
+	shellUtils := []string{"bash", "sh", "cat", "ls", "mkdir", "rm", "cp", "mv", "chmod", "chown"}
+	for _, util := range shellUtils {
+		if hostPath, err := exec.LookPath(util); err == nil {
+			prootArgs = append(prootArgs, "-b", hostPath)
+		}
+	}
+
 	// For package managers and system operations, fake root privileges
 	// This allows dnf, apt, etc. to work properly without actual root access
 	if userStr == "" || userStr == "root" || userStr == "0" {
@@ -116,28 +133,60 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	}
 
 	// Set up environment for PRoot execution
-	// Use the existing environment handling logic
-	prootEnv := buildArgs.ReplacementEnvs(config.Env)
+	// Convert the environment map to slice format for command execution
+	var prootEnvSlice []string
+	for key, value := range buildArgs.ReplacementEnvs(config.Env) {
+		prootEnvSlice = append(prootEnvSlice, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Ensure PATH includes common binary directories within the guest
+	// and the directories where bound binaries are available
+	pathFound := false
+	for i, env := range prootEnvSlice {
+		if strings.HasPrefix(env, "PATH=") {
+			prootEnvSlice[i] = env + ":/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin:."
+			pathFound = true
+			break
+		}
+	}
+	if !pathFound {
+		prootEnvSlice = append(prootEnvSlice, "PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin:.")
+	}
+
+	// Set HOME to a writable location within the guest
+	prootEnvSlice = append(prootEnvSlice, fmt.Sprintf("HOME=%s", kConfig.KanikoDir))
+
+	// Set TMPDIR to ensure temporary files go to the right place
+	prootEnvSlice = append(prootEnvSlice, "TMPDIR=/tmp")
 
 	var cmd *exec.Cmd
 	if cmdRun.PrependShell {
-		// For shell commands, use the shell from the host since guest might not have it
+		// For shell commands, use the shell from the host and bind it into the guest
 		// Use the configured shell or default to /bin/sh from host
 		shell := "/bin/sh"
 		if len(config.Shell) > 0 {
 			shell = config.Shell[0]
 		}
 
-		// Use host shell with PRoot to execute in guest context
-		cmd = exec.Command("proot", append(prootArgs, shell, "-c", strings.Join(cmdRun.CmdLine, " "))...)
+		// Bind the host shell into the guest filesystem and use it
+		prootArgs = append(prootArgs, "-b", shell)
+		cmd = exec.Command("proot", append(prootArgs, filepath.Base(shell), "-c", strings.Join(cmdRun.CmdLine, " "))...)
 	} else {
 		// For direct commands, use PRoot with automatic binding
 		// Ensure the command path is accessible - use host path since guest might not have it
 		guestCommand := newCommand[0]
-		if !strings.HasPrefix(guestCommand, "/") {
+		if strings.HasPrefix(guestCommand, "/") {
+			// If it's an absolute path, bind the host binary if it exists
+			if _, err := os.Stat(guestCommand); err == nil {
+				prootArgs = append(prootArgs, "-b", guestCommand)
+				guestCommand = filepath.Base(guestCommand)
+			}
+		} else {
 			// If it's not an absolute path, look for it in the host PATH first
 			if hostPath, err := exec.LookPath(guestCommand); err == nil {
-				guestCommand = hostPath
+				// Bind the host binary into the guest filesystem
+				prootArgs = append(prootArgs, "-b", hostPath)
+				guestCommand = filepath.Base(hostPath)
 			}
 		}
 
@@ -164,12 +213,6 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	// No need for host-level credential changes
 
 	// Set environment variables for PRoot execution
-	// Convert map to slice format for addDefaultHOME
-	var prootEnvSlice []string
-	for key, value := range prootEnv {
-		prootEnvSlice = append(prootEnvSlice, fmt.Sprintf("%s=%s", key, value))
-	}
-
 	env, err := addDefaultHOME(userStr, prootEnvSlice)
 	if err != nil {
 		return errors.Wrap(err, "adding default HOME variable")
