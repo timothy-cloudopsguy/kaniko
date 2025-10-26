@@ -91,10 +91,10 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	var cmd *exec.Cmd
 	if cmdRun.PrependShell {
 		// For shell commands, use the shell from within the chroot
-		cmd = exec.Command("sudo", "chroot", kConfig.KanikoDir, "/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))
+		cmd = exec.Command("chroot", kConfig.KanikoDir, "/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))
 	} else {
 		// For direct commands, chroot to the kaniko directory
-		cmd = exec.Command("sudo", "chroot", kConfig.KanikoDir, newCommand[0])
+		cmd = exec.Command("chroot", kConfig.KanikoDir, newCommand[0])
 		cmd.Args = append(cmd.Args, newCommand[1:]...)
 	}
 
