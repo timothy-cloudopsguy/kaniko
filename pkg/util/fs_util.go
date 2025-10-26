@@ -199,6 +199,10 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 				name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
 				path := filepath.Join(dir, name)
 
+				if !strings.HasPrefix(path, config.KanikoDir) {
+					path = filepath.Join(config.KanikoDir, path)
+				}
+
 				if CheckCleanedPathAgainstIgnoreList(path) {
 					logrus.Tracef("Not deleting %s, as it's ignored", path)
 					continue
