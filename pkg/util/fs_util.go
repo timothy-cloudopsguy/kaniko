@@ -307,6 +307,11 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 	uid := hdr.Uid
 	gid := hdr.Gid
 
+	// if path does not begin with config.KanikoDir, ensure it does
+	if !strings.HasPrefix(path, config.KanikoDir) {
+		path = filepath.Join(config.KanikoDir, path)
+	}
+
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
