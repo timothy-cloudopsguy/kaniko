@@ -86,31 +86,8 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	logrus.Infof("Cmd: %s", newCommand[0])
 	logrus.Infof("Args: %s", newCommand[1:])
 
-	// Use chroot to execute commands in the extracted filesystem context
-	// This isolates the command execution from the original container environment
-	var cmd *exec.Cmd
-	if cmdRun.PrependShell {
-		// For shell commands, use the shell from within the chroot
-		cmd = exec.Command("chroot", kConfig.KanikoDir, "/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))
-	} else {
-		// For direct commands, chroot to the kaniko directory
-		cmd = exec.Command("chroot", kConfig.KanikoDir, newCommand[0])
-		cmd.Args = append(cmd.Args, newCommand[1:]...)
-	}
-
-	// Set working directory relative to the chroot root
-	if config.WorkingDir != "" && config.WorkingDir != "/" {
-		// Working directory is relative to the chroot root
-		cmd.Dir = config.WorkingDir
-	} else {
-		// Default to root of chroot
-		cmd.Dir = "/"
-	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Resolve user before setting up PRoot
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
 	u := config.User
 	userAndGroup := strings.Split(u, ":")
 	userStr, err := util.ResolveEnvironmentReplacement(userAndGroup[0], replacementEnvs, false)
@@ -118,13 +95,45 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return errors.Wrapf(err, "resolving user %s", userAndGroup[0])
 	}
 
-	// If specified, run the command as a specific user
-	if userStr != "" {
-		cmd.SysProcAttr.Credential, err = util.SyscallCredentials(userStr)
-		if err != nil {
-			return errors.Wrap(err, "credentials")
-		}
+	// Use PRoot to execute commands in the extracted filesystem context
+	// This isolates the command execution from the original container environment
+	// PRoot provides better compatibility and doesn't require root privileges
+	var prootArgs []string
+	prootArgs = append(prootArgs, "-R", kConfig.KanikoDir)
+
+	// For package managers and system operations, fake root privileges
+	// This allows dnf, apt, etc. to work properly without actual root access
+	if userStr == "" || userStr == "root" || userStr == "0" {
+		prootArgs = append(prootArgs, "-0")
+	} else if userStr != "" {
+		// For specific users, use PRoot's user switching
+		prootArgs = append(prootArgs, "-u", userStr)
 	}
+
+	var cmd *exec.Cmd
+	if cmdRun.PrependShell {
+		// For shell commands, use PRoot with automatic system directory binding
+		cmd = exec.Command("proot", append(prootArgs, "/bin/sh", "-c", strings.Join(cmdRun.CmdLine, " "))...)
+	} else {
+		// For direct commands, use PRoot with automatic binding
+		cmd = exec.Command("proot", append(prootArgs, newCommand[0])...)
+		cmd.Args = append(cmd.Args, newCommand[1:]...)
+	}
+
+	// PRoot handles working directory internally, but we can still set it
+	if config.WorkingDir != "" && config.WorkingDir != "/" {
+		// Working directory is relative to the PRoot root
+		cmd.Dir = config.WorkingDir
+	} else {
+		// Default to root of PRoot
+		cmd.Dir = "/"
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// User switching is handled by PRoot with -0 or -u flags above
+	// No need for host-level credential changes
 
 	env, err := addDefaultHOME(userStr, replacementEnvs)
 	if err != nil {
