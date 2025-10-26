@@ -139,6 +139,9 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		prootEnvSlice = append(prootEnvSlice, fmt.Sprintf("%s=%s", key, value))
 	}
 
+	// Disable seccomp in PRoot to avoid ptrace restrictions in containerized environments
+	prootEnvSlice = append(prootEnvSlice, "PROOT_NO_SECCOMP=1")
+
 	// Ensure PATH includes common binary directories within the guest
 	// and the directories where bound binaries are available
 	pathFound := false
